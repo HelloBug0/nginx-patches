@@ -1,0 +1,109 @@
+From 24d496dc1978f69ff5745538f5fbfc23808e8315 Mon Sep 17 00:00:00 2001
+From: HelloBug0
+Date: Wed, 28 Jan 2026 10:27:45 +0800
+Subject: [PATCH] support server name matching with port
+
+---
+ src/http/modules/ngx_http_ssl_module.c | 15 +++++++++++++++
+ src/http/modules/ngx_http_ssl_module.h |  3 +++
+ src/http/ngx_http_request.c            | 23 +++++++++++++++++++++++
+ 3 files changed, 41 insertions(+)
+
+diff --git a/src/http/modules/ngx_http_ssl_module.c b/src/http/modules/ngx_http_ssl_module.c
+index dc82472..f188e50 100644
+--- a/src/http/modules/ngx_http_ssl_module.c
++++ b/src/http/modules/ngx_http_ssl_module.c
+@@ -306,6 +306,15 @@ static ngx_command_t  ngx_http_ssl_commands[] = {
+       offsetof(ngx_http_ssl_srv_conf_t, reject_handshake),
+       NULL },
+ 
++#if (NGX_SSL_SERVER_NAME_WITH_PORT)
++    { ngx_string("ssl_server_name_with_port"),
++      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
++      ngx_conf_set_flag_slot,
++      NGX_HTTP_SRV_CONF_OFFSET,
++      offsetof(ngx_http_ssl_srv_conf_t, server_name_with_port),
++      NULL },
++#endif
++
+       ngx_null_command
+ };
+ 
+@@ -637,6 +646,9 @@ ngx_http_ssl_create_srv_conf(ngx_conf_t *cf)
+     sscf->certificate_compression = NGX_CONF_UNSET;
+     sscf->early_data = NGX_CONF_UNSET;
+     sscf->reject_handshake = NGX_CONF_UNSET;
++#if (NGX_SSL_SERVER_NAME_WITH_PORT)
++    sscf->server_name_with_port = NGX_CONF_UNSET;
++#endif
+     sscf->buffer_size = NGX_CONF_UNSET_SIZE;
+     sscf->verify = NGX_CONF_UNSET_UINT;
+     sscf->verify_depth = NGX_CONF_UNSET_UINT;
+@@ -677,6 +689,9 @@ ngx_http_ssl_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
+ 
+     ngx_conf_merge_value(conf->early_data, prev->early_data, 0);
+     ngx_conf_merge_value(conf->reject_handshake, prev->reject_handshake, 0);
++#if (NGX_SSL_SERVER_NAME_WITH_PORT)
++    ngx_conf_merge_value(conf->server_name_with_port, prev->server_name_with_port, 0);
++#endif
+ 
+     ngx_conf_merge_bitmask_value(conf->protocols, prev->protocols,
+                          (NGX_CONF_BITMASK_SET|NGX_SSL_DEFAULT_PROTOCOLS));
+diff --git a/src/http/modules/ngx_http_ssl_module.h b/src/http/modules/ngx_http_ssl_module.h
+index 9b26529..e6ee3e1 100644
+--- a/src/http/modules/ngx_http_ssl_module.h
++++ b/src/http/modules/ngx_http_ssl_module.h
+@@ -21,6 +21,9 @@ typedef struct {
+     ngx_flag_t                      certificate_compression;
+     ngx_flag_t                      early_data;
+     ngx_flag_t                      reject_handshake;
++#if (NGX_SSL_SERVER_NAME_WITH_PORT)
++    ngx_flag_t                      server_name_with_port;
++#endif
+ 
+     ngx_uint_t                      protocols;
+ 
+diff --git a/src/http/ngx_http_request.c b/src/http/ngx_http_request.c
+index 533af45..aec6370 100644
+--- a/src/http/ngx_http_request.c
++++ b/src/http/ngx_http_request.c
+@@ -883,6 +883,10 @@ ngx_http_ssl_servername(ngx_ssl_conn_t *ssl_conn, int *ad, void *arg)
+     ngx_http_ssl_srv_conf_t   *sscf;
+     ngx_http_core_loc_conf_t  *clcf;
+     ngx_http_core_srv_conf_t  *cscf;
++#if (NGX_SSL_SERVER_NAME_WITH_PORT)
++    in_port_t                  port;
++    u_char                    *key;
++#endif
+ 
+     c = ngx_ssl_get_connection(ssl_conn);
+ 
+@@ -941,6 +945,25 @@ ngx_http_ssl_servername(ngx_ssl_conn_t *ssl_conn, int *ad, void *arg)
+         goto done;
+     }
+ 
++#if (NGX_SSL_SERVER_NAME_WITH_PORT)
++    cscf = hc->addr_conf->default_server;
++    sscf = ngx_http_get_module_srv_conf(cscf->ctx, ngx_http_ssl_module);
++    if (sscf->server_name_with_port && c->proxy_protocol) {
++        port= c->proxy_protocol->dst_port;
++
++        key = ngx_palloc(c->pool, host.len + NGX_INT32_LEN);
++        if (key == NULL) {
++            goto error;
++        }
++
++        ngx_sprintf(key, "%V:%d", &host, port);
++        host.data = key;
++        host.len = ngx_strlen(key);
++    }
++    cscf = NULL;
++    sscf = NULL;
++#endif
++
+     rc = ngx_http_find_virtual_server(c, hc->addr_conf->virtual_names, &host,
+                                       NULL, &cscf);
+ 
+-- 
+2.43.7
+
