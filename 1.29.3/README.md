@@ -1,5 +1,3 @@
-[中文文档](README_zh.md) | **English**
-
 # Nginx Patches
 
 ## Table of Contents
