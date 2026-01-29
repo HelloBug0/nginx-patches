@@ -10,7 +10,7 @@
 # Patch1: Support SSL Server Name with Port
 
 ## Directive
-Syntax:  ssl_server_name_with_port on | off;
+> Syntax:  ssl_server_name_with_port on | off;
 Default: ssl_server_name_with_port off;
 Context: http
 
@@ -94,11 +94,11 @@ http {
 
 ## Directive
 
-Syntax:  ssl_key_log *path*;
+> Syntax:  ssl_key_log *path*;
 Default: -
 Context: http, server
 
-Syntax:  proxy_ssl_key_log *path*;
+> Syntax:  proxy_ssl_key_log *path*;
 Default: -
 Context: http, server, location
 
