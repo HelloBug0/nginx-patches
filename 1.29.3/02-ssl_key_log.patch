@@ -1,0 +1,214 @@
+From 763f640bc56f3e0cde4eb7cc124fb842fcf4fe29 Mon Sep 17 00:00:00 2001
+From: HelloBug0 <15161478125@163.com>
+Date: Thu, 29 Jan 2026 11:51:56 +0800
+Subject: [PATCH] feature: add ssl_key_log and proxy_ssl_key_log
+
+---
+ src/event/ngx_event_openssl.c            | 61 ++++++++++++++++++++++++
+ src/event/ngx_event_openssl.h            |  4 +-
+ src/http/modules/ngx_http_proxy_module.c | 14 ++++++
+ src/http/modules/ngx_http_ssl_module.c   | 13 +++++
+ 4 files changed, 90 insertions(+), 2 deletions(-)
+
+diff --git a/src/event/ngx_event_openssl.c b/src/event/ngx_event_openssl.c
+index 5175d7a..941ffdf 100644
+--- a/src/event/ngx_event_openssl.c
++++ b/src/event/ngx_event_openssl.c
+@@ -95,6 +95,8 @@ static void *ngx_openssl_create_conf(ngx_cycle_t *cycle);
+ static char *ngx_openssl_engine(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+ static void ngx_openssl_exit(ngx_cycle_t *cycle);
+ 
++static void ngx_ssl_key_log_callback(const ngx_ssl_conn_t *ssl_conn,
++    const char *line);
+ 
+ static ngx_command_t  ngx_openssl_commands[] = {
+ 
+@@ -141,6 +143,7 @@ int  ngx_ssl_index;
+ int  ngx_ssl_certificate_name_index;
+ int  ngx_ssl_certificate_comp_index;
+ int  ngx_ssl_client_hello_arg_index;
++int  ngx_ssl_key_log_index;
+ 
+ 
+ u_char  ngx_ssl_session_buffer[NGX_SSL_MAX_SESSION_SIZE];
+@@ -5463,6 +5466,64 @@ ngx_ssl_get_curve(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
+ }
+ 
+ 
++ngx_int_t
++ngx_ssl_key_log(ngx_conf_t *cf, ngx_ssl_t *ssl, ngx_str_t *path)
++{
++    ngx_open_file_t  *file;
++
++    if (path->len == 0) {
++        return NGX_OK;
++    }
++
++    if (ngx_ssl_key_log_index == -1) {
++        ngx_ssl_key_log_index = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL,
++                                                          NULL);
++        if (ngx_ssl_key_log_index == -1) {
++            ngx_ssl_error(NGX_LOG_ALERT, ssl->log, 0,
++                          "SSL_CTX_get_ex_new_index() failed");
++            return NGX_ERROR;
++        }
++    }
++
++    file = ngx_conf_open_file(cf->cycle, path);
++    if (file == NULL) {
++        return NGX_ERROR;
++    }
++
++    if (SSL_CTX_set_ex_data(ssl->ctx, ngx_ssl_key_log_index, file) == 0) {
++        ngx_ssl_error(NGX_LOG_ALERT, ssl->log, 0,
++                      "SSL_CTX_set_ex_data() failed");
++        return NGX_ERROR;
++    }
++
++    SSL_CTX_set_keylog_callback(ssl->ctx, ngx_ssl_key_log_callback);
++
++    return NGX_OK;
++}
++
++
++static void
++ngx_ssl_key_log_callback(const ngx_ssl_conn_t *ssl_conn, const char *line)
++{
++    u_char           *p;
++    SSL_CTX          *ctx;
++    ngx_open_file_t  *file;
++    u_char            buf[2048];
++
++    ctx = SSL_get_SSL_CTX((ngx_ssl_conn_t *) ssl_conn);
++
++    file = SSL_CTX_get_ex_data(ctx, ngx_ssl_key_log_index);
++    if (file == NULL) {
++        return;
++    }
++
++    p = ngx_cpymem(buf, line, ngx_strlen(line));
++    *p++ = LF;
++
++    ngx_write_fd(file->fd, buf, p - buf);
++}
++
++
+ ngx_int_t
+ ngx_ssl_get_curves(ngx_connection_t *c, ngx_pool_t *pool, ngx_str_t *s)
+ {
+diff --git a/src/event/ngx_event_openssl.h b/src/event/ngx_event_openssl.h
+index ae0e173..48e963f 100644
+--- a/src/event/ngx_event_openssl.h
++++ b/src/event/ngx_event_openssl.h
+@@ -386,7 +386,7 @@ void ngx_ssl_connection_error(ngx_connection_t *c, int sslerr, ngx_err_t err,
+ void ngx_cdecl ngx_ssl_error(ngx_uint_t level, ngx_log_t *log, ngx_err_t err,
+     char *fmt, ...);
+ void ngx_ssl_cleanup_ctx(void *data);
+-
++ngx_int_t ngx_ssl_key_log(ngx_conf_t *cf, ngx_ssl_t *ssl, ngx_str_t *path);
+ 
+ extern int  ngx_ssl_connection_index;
+ extern int  ngx_ssl_server_conf_index;
+@@ -397,7 +397,7 @@ extern int  ngx_ssl_index;
+ extern int  ngx_ssl_certificate_name_index;
+ extern int  ngx_ssl_certificate_comp_index;
+ extern int  ngx_ssl_client_hello_arg_index;
+-
++extern int  ngx_ssl_key_log_index;
+ 
+ extern u_char  ngx_ssl_session_buffer[NGX_SSL_MAX_SESSION_SIZE];
+ 
+diff --git a/src/http/modules/ngx_http_proxy_module.c b/src/http/modules/ngx_http_proxy_module.c
+index 8d5385c..975d789 100644
+--- a/src/http/modules/ngx_http_proxy_module.c
++++ b/src/http/modules/ngx_http_proxy_module.c
+@@ -124,6 +124,7 @@ typedef struct {
+     ngx_uint_t                     ssl_verify_depth;
+     ngx_str_t                      ssl_trusted_certificate;
+     ngx_str_t                      ssl_crl;
++    ngx_str_t                      ssl_key_log;
+     ngx_array_t                   *ssl_conf_commands;
+ #endif
+ } ngx_http_proxy_loc_conf_t;
+@@ -791,6 +792,13 @@ static ngx_command_t  ngx_http_proxy_commands[] = {
+       0,
+       NULL },
+ 
++    { ngx_string("proxy_ssl_key_log"),
++      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
++      ngx_conf_set_str_slot,
++      NGX_HTTP_LOC_CONF_OFFSET,
++      offsetof(ngx_http_proxy_loc_conf_t, ssl_key_log),
++      NULL },
++
+     { ngx_string("proxy_ssl_conf_command"),
+       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
+       ngx_conf_set_keyval_slot,
+@@ -3992,6 +4000,7 @@ ngx_http_proxy_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
+     ngx_conf_merge_str_value(conf->ssl_trusted_certificate,
+                               prev->ssl_trusted_certificate, "");
+     ngx_conf_merge_str_value(conf->ssl_crl, prev->ssl_crl, "");
++    ngx_conf_merge_str_value(conf->ssl_key_log, prev->ssl_key_log, "");
+ 
+     ngx_conf_merge_ptr_value(conf->upstream.ssl_certificate,
+                               prev->upstream.ssl_certificate, NULL);
+@@ -5290,6 +5299,7 @@ ngx_http_proxy_merge_ssl(ngx_conf_t *cf, ngx_http_proxy_loc_conf_t *conf,
+         && conf->ssl_verify_depth == NGX_CONF_UNSET_UINT
+         && conf->ssl_trusted_certificate.data == NULL
+         && conf->ssl_crl.data == NULL
++        && conf->ssl_key_log.data == NULL
+         && conf->upstream.ssl_session_reuse == NGX_CONF_UNSET
+         && conf->ssl_conf_commands == NGX_CONF_UNSET_PTR)
+     {
+@@ -5339,6 +5349,10 @@ ngx_http_proxy_set_ssl(ngx_conf_t *cf, ngx_http_proxy_loc_conf_t *plcf)
+         return NGX_ERROR;
+     }
+ 
++    if (ngx_ssl_key_log(cf, plcf->upstream.ssl, &plcf->ssl_key_log) != NGX_OK) {
++        return NGX_ERROR;
++    }
++
+     cln = ngx_pool_cleanup_add(cf->pool, 0);
+     if (cln == NULL) {
+         ngx_ssl_cleanup_ctx(plcf->upstream.ssl);
+diff --git a/src/http/modules/ngx_http_ssl_module.c b/src/http/modules/ngx_http_ssl_module.c
+index dc82472..69e6f7f 100644
+--- a/src/http/modules/ngx_http_ssl_module.c
++++ b/src/http/modules/ngx_http_ssl_module.c
+@@ -306,6 +306,13 @@ static ngx_command_t  ngx_http_ssl_commands[] = {
+       offsetof(ngx_http_ssl_srv_conf_t, reject_handshake),
+       NULL },
+ 
++    { ngx_string("ssl_key_log"),
++      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
++      ngx_conf_set_str_slot,
++      NGX_HTTP_SRV_CONF_OFFSET,
++      offsetof(ngx_http_ssl_srv_conf_t, key_log_file),
++      NULL },
++
+       ngx_null_command
+ };
+ 
+@@ -722,6 +729,8 @@ ngx_http_ssl_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
+     ngx_conf_merge_str_value(conf->stapling_responder,
+                          prev->stapling_responder, "");
+ 
++    ngx_conf_merge_str_value(conf->key_log_file, prev->key_log_file, "");
++
+     conf->ssl.log = cf->log;
+ 
+     if (conf->certificates) {
+@@ -745,6 +754,10 @@ ngx_http_ssl_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
+         return NGX_CONF_ERROR;
+     }
+ 
++    if (ngx_ssl_key_log(cf, &conf->ssl, &conf->key_log_file) != NGX_OK) {
++        return NGX_CONF_ERROR;
++    }
++
+     cln = ngx_pool_cleanup_add(cf->pool, 0);
+     if (cln == NULL) {
+         ngx_ssl_cleanup_ctx(&conf->ssl);
+-- 
+2.43.7
+
