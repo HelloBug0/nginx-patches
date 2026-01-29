@@ -10,9 +10,9 @@
 # Patch1: Support SSL Server Name with Port
 
 ## Directive
-> Syntax:  ssl_server_name_with_port on | off;
-> Default: ssl_server_name_with_port off;
-> Context: http
+> Syntax:  ssl_server_name_with_port on | off;  
+> Default: ssl_server_name_with_port off;  
+> Context: http  
 
 ## Introduction
 This patch (`01-ssl_server_name_with_port.patch`) enhances Nginx's SSL handshake capabilities by adding support for matching Server Names (SNI) that include a port number.
@@ -94,13 +94,13 @@ http {
 
 ## Directive
 
-> Syntax:  ssl_key_log *path*;
-> Default: -
-> Context: http, server
+> Syntax:  ssl_key_log *path*;  
+> Default: -  
+> Context: http, server  
 
-> Syntax:  proxy_ssl_key_log *path*;
-> Default: -
-> Context: http, server, location
+> Syntax:  proxy_ssl_key_log *path*;  
+> Default: -  
+> Context: http, server, location  
 
 ## Introduction
 
